@@ -1,0 +1,129 @@
+---
+title: "Spherical Geometry"
+author: "Edzer Pebesma; OpenGeoHub summer school, Sept 1-3 2021"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    toc_depth: 2
+---
+
+```{r echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE)
+```
+
+## Create a set of 1000000 (1e6) points, preferably spread (approximately) regularly over the Earth’s surface
+
+O.K., we do a bit less.
+
+```{r}
+library(sf)
+library(stars)
+library(sp)
+st_bbox() |>
+  st_as_sfc() -> bb
+as(bb, "Spatial") |>
+  spsample(n = 1000, type = "Fibonacci") |> # https://arxiv.org/pdf/0912.4540.pdf
+  st_as_sfc() -> x
+plot(x)
+plot(bb, add = TRUE)
+```
+
+Or, in orthographic:
+
+```{r}
+par(mfrow=c(2,2), mar = rep(0, 4))
+plot(st_transform(x, st_crs("+proj=ortho +lon_0=45 +lat_0=-45")), pch = 3)
+plot(st_transform(x, st_crs("+proj=ortho +lon_0=0 +lat_0=-45")), pch = 3)
+plot(st_transform(x, st_crs("+proj=ortho +lon_0=-30 +lat_0=35")), pch = 3)
+plot(st_transform(x, st_crs("+proj=ortho +lon_0=-90 +lat_0=-15")), pch = 3)
+```
+
+Some more points:
+
+```{r}
+as(bb, "Spatial") |>
+  spsample(n = 1e5, type = "Fibonacci") |>
+  st_as_sfc() -> x
+```
+
+## Subset this dataset for points that are on land
+
+```{r}
+library(rnaturalearth)
+co = ne_countries(returnclass = "sf") |> st_make_valid()
+x = x[co]
+plot(x)
+```
+
+## Generate for the entire Earth, ...
+
+... on a regular grid, densities of these land points (also
+called intensity: number of points per unit area), using different
+bandwidths (e.g. 50, 100, 200, 500 and 1000 km)
+
+Create a function that takes a point set and a bandwidth as input
+arguments and that returns a global grid with point densities
+
+```{r}
+(grd = st_as_stars(st_bbox(), nx = 90, ny = 45)) # creates 4-degree global grid
+```
+
+Slow:
+```{r eval=FALSE}
+calc_dens = function(pts, grd, dist) {
+		buf = st_buffer(pts, dist)
+		a = st_area(buf) |> units::set_units(km^2) |> units::drop_units()
+		lengths(st_intersects(grd, buf)) / a
+}
+grd$d1000 = calc_dens(x, st_as_sfc(grd, as_points = TRUE), units::set_units(1000, km))
+plot(grd["d1000"])
+title("points per square km")
+```
+
+Faster:
+```{r}
+calc_dens = function(pts, grd, dist) {
+		pt = st_sfc(st_point(c(0,0)), crs = 4326)
+		a = st_area(st_buffer(pt, dist)) |> units::set_units(km^2) |> units::drop_units()
+		lengths(st_is_within_distance(grd, pts, dist)) / a
+}
+grd$d100 = calc_dens(x, st_as_sfc(grd, as_points = TRUE), units::set_units(100, km))
+grd$d200 = calc_dens(x, st_as_sfc(grd, as_points = TRUE), units::set_units(200, km))
+grd$d500 = calc_dens(x, st_as_sfc(grd, as_points = TRUE), units::set_units(500, km))
+grd$d1000 = calc_dens(x, st_as_sfc(grd, as_points = TRUE), units::set_units(1000, km))
+grd$values = NULL
+plot(merge(grd))
+```
+
+# Visualise these maps with densities using an orthographic projection, from several different perspectives
+
+```{r}
+par(mfrow=c(2,2), mar = c(0, 0, 1.1, 0))
+sf = st_as_sf(grd)
+ne = function(x, lat, lon) { 
+		crs = st_crs(paste0("+proj=ortho +lon_0=", lon, " +lat_0=", lat))
+		pt = st_sfc(st_point(c(lon, lat)), crs = 4326)
+		bu = st_buffer(pt, units::set_units(9800000, m))
+		x = st_transform(st_intersection(x, bu), crs);
+		plot(x, key.pos = NULL, border = NA, reset = FALSE)
+		plot(st_transform(st_intersection(st_geometry(co), bu), crs), add = TRUE)
+}
+ne(sf[4], 45, -45)
+ne(sf[4], -30, 45)
+ne(sf[4], -45, -135)
+ne(sf[4], 90, 0)
+```
+
+## Create a spinning globe (animated) plot of the densities
+
+## (for bonus points) build in the option to choose different kernel functions for density computation
+
+## (for bonus points) let the densities not spill over in water areas, i.e. compute them only over land and take edge effects into account
+
+This only clips the maps above, it doesn't compute taking water into account:
+```{r}
+plot(merge(grd)[co])
+```
